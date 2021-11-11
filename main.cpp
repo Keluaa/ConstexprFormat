@@ -13,6 +13,8 @@ constexpr auto test_fmt = "hello %x times"sv;
  * Formats that should not compile 
  */
 
+//constexpr auto test_fmt = ""sv; // compilable?
+
 //constexpr auto test_fmt = "hello %w times"sv;
 //constexpr auto test_fmt = "hello %\0 times"sv;
 //constexpr auto test_fmt = "hello times%"sv;

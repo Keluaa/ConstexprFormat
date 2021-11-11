@@ -13,52 +13,28 @@
 #include <ostream>
 
 
-namespace cst_fmt
-{
-    template<size_t N>
-    class FormattedCharArray : public std::array<char, N>
-    {
-        size_t m_effective_size;
-
-    public:
-        using std::array<char, N>::data;
-
-        constexpr void set_effective_size(size_t effective_size) { m_effective_size = effective_size; }
-
-        [[nodiscard]]
-        constexpr size_t effective_size() const { return m_effective_size; }
-
-        [[nodiscard]]
-        constexpr std::string_view view() const { return std::string_view(data(), m_effective_size); }
-
-
-        [[nodiscard]]
-#ifndef __clang__
-        // Clang doesn't support constexpr string constructors for now
-        constexpr
-#endif
-        std::string str() const { return std::string(data(), m_effective_size + 1); }
-    };
-}
-
-
-template<size_t N>
-std::ostream& operator<<(std::ostream& os, const cst_fmt::FormattedCharArray<N>& str)
-{
-    os << str.view();
-    return os;
-}
-
-
 namespace cst_fmt::utils
 {
+    /**
+     * Type trait for const iterable types with a size.
+     */
+    template <typename T, typename = void>
+    struct is_const_iterable : std::false_type {};
+    template <typename T>
+    struct is_const_iterable<T,
+            std::void_t<decltype(std::declval<T>().cbegin()),
+                        decltype(std::declval<T>().cend()),
+                        decltype(std::declval<T>().size())>>
+            : std::true_type {};
+
+
     /**
      *  Returns the number of decimal digits needed to represent the given number.
      */
     template<typename T>
     constexpr size_t const_log10(T x)
     {
-    	static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
+        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
         while (x > 0) {
             x /= 10;
@@ -66,18 +42,18 @@ namespace cst_fmt::utils
         }
         return i;
     }
-    
-    
+
+
     /**
      *  Returns the number of decimal digits needed to represent the given number in hexadecimal.
      */
     template<typename T>
     constexpr size_t const_log16(T x)
     {
-    	static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
+        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
         while (x > 0) {
-            x /= 16;
+            x >>= 4;
             i++;
         }
         return i;
@@ -102,8 +78,8 @@ namespace cst_fmt::utils
             return a;
         }
     }
-    
-    
+
+
     /**
      *  Returns 16^p. Integers only.
      */
@@ -115,12 +91,94 @@ namespace cst_fmt::utils
             return 1;
         }
         else {
-            return R(16) << (5 * (p - 1));
+            return R(16) << (4 * (p - 1));
         }
     }
 }
 
 
+namespace cst_fmt
+{
+    /**
+     * A simple struct holding reusable information for a format.
+     */
+    template<const std::string_view& fmt, const size_t N>
+    struct CompiledFormat
+    {
+        [[nodiscard]]
+        constexpr const std::string_view& get_fmt() const { return fmt; }
+
+        [[nodiscard]]
+        constexpr size_t get_str_size() const { return N; }
+    };
+
+
+    /**
+     * A constant size, string-like object.
+     *
+     */
+    template<size_t N>
+    class FormattedCharArray : public std::array<char, N>
+    {
+        size_t m_effective_size;
+
+    public:
+        using std::array<char, N>::data;
+
+        constexpr void set_effective_size(size_t effective_size) { m_effective_size = effective_size; }
+
+        [[nodiscard]]
+        constexpr size_t effective_size() const { return m_effective_size; }
+
+        [[nodiscard]]
+        constexpr std::string_view view() const { return std::string_view(data(), m_effective_size); }
+
+
+        [[nodiscard]]
+#ifndef __clang__
+        // Clang doesn't support constexpr string constructors for now
+        constexpr
+#endif
+        std::string str() const { return std::string(data(), m_effective_size + 1); }
+
+
+        template<typename T>
+        typename std::enable_if<utils::is_const_iterable<T>::value, bool>::type
+        constexpr operator==(const T& array) const
+        {
+            if (m_effective_size != array.size()) {
+                return false;
+            }
+            // We iterate on the other array since our array size is bigger than the effective size
+            return std::equal(array.cbegin(), array.cend(), this->cbegin());
+        }
+
+
+        template<typename T>
+        typename std::enable_if<utils::is_const_iterable<T>::value, bool>::type
+        constexpr operator!=(const T& array) const
+        {
+            if (m_effective_size != array.size()) {
+                return true;
+            }
+            // We iterate on the other array since our array size is bigger than the effective size
+            return !std::equal(array.cbegin(), array.cend(), this->cbegin());
+        }
+    };
+
+
+    template<size_t N>
+    std::ostream& operator<<(std::ostream& os, const FormattedCharArray<N>& str)
+    {
+        os << str.view();
+        return os;
+    }
+}
+
+
+/*
+ * Additional formats can be specified here by using the same structure.
+ */
 namespace cst_fmt::specialisation
 {
     template<char fmt, typename T>
@@ -155,11 +213,12 @@ namespace cst_fmt::specialisation
     }
 
     
-    /*
+    /**
      * Default option, used only when 'fmt' is not specified by another definition.
      * Made to fail in all cases.
      */
     template<char fmt, typename T, typename... Args>
+    [[maybe_unused]]
     consteval size_t formatted_str_length(Args...)
     {
         static_assert(fmt == '\0', "Unknown format specifier");
@@ -169,7 +228,7 @@ namespace cst_fmt::specialisation
 
 
     template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 'd', void>::type
+    typename std::enable_if<fmt == 'd' && !std::is_same_v<T, bool>, void>::type
     constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
         static_assert(std::numeric_limits<T>::is_integer, "Expected an integer type for '%d'");
@@ -202,20 +261,19 @@ namespace cst_fmt::specialisation
     }
 
 
-    template<char fmt, size_t N, bool>
-    typename std::enable_if<fmt == 'd', void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, bool val)
+    template<char fmt, size_t N, typename T>
+    typename std::enable_if<fmt == 'd' && std::is_same_v<T, bool>, void>::type
+    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
         str[pos++] = val ? '1' : '0';
     }
     
     
     template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 'x', void>::type
+    typename std::enable_if<fmt == 'x' && !std::is_same_v<T, bool>, void>::type
     constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
         static_assert(std::numeric_limits<T>::is_integer, "Expected an integer type for '%x'");
-        static_assert(!std::is_same<T, bool>::value, "Unsupported bool type for '%x'");
 
         typedef typename std::make_unsigned<T>::type uT;
 
@@ -244,12 +302,23 @@ namespace cst_fmt::specialisation
         }
     }
 
+
+    template<char fmt, size_t N, typename T>
+    typename std::enable_if<fmt == 'x' && std::is_same_v<T, bool>, void>::type
+    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    {
+        str[pos++] = '0';
+        str[pos++] = 'x';
+        str[pos++] = val ? '1' : '0';
+    }
+
     
-    /*
+    /**
      * Default option, used only when 'fmt' is not specified by another definition.
      * Made to fail in all cases.
      */
     template<char fmt>
+    [[maybe_unused]]
     constexpr void format_to_str(...)
     {
         static_assert(fmt == '\0', "Unknown format specifier");
@@ -300,17 +369,23 @@ namespace cst_fmt::internal
     template<const std::string_view& fmt, typename... Args>
     consteval size_t get_formatted_str_length_start()
     {
-        constexpr size_t nxt = next_format<fmt, 0>();
-
-        // We add one for the extra '\0' character
-
-        if constexpr (nxt == std::string_view::npos) {
-            static_assert(sizeof...(Args) == 0, "No arguments expected for format string");
-            return fmt.size() + 1;
+        if constexpr (fmt.empty()) {
+            static_assert(sizeof...(Args) == 0, "Expected no arguments for empty format string");
+            return 1;
         }
         else {
-            static_assert(sizeof...(Args) > 0, "Not enough arguments for format string");
-            return get_formatted_str_length<fmt, 0, Args...>() + 1;
+            constexpr size_t nxt = next_format<fmt, 0>();
+
+            // We add one for the extra '\0' character
+
+            if constexpr (nxt == std::string_view::npos) {
+                static_assert(sizeof...(Args) == 0, "No arguments expected for format string");
+                return fmt.size() + 1;
+            }
+            else {
+                static_assert(sizeof...(Args) > 0, "Not enough arguments for format string");
+                return get_formatted_str_length<fmt, 0, Args...>() + 1;
+            }
         }
     }
 
@@ -353,6 +428,28 @@ namespace cst_fmt::internal
 
 namespace cst_fmt
 {
+    // TODO : check if this could actually reduce compilation time, since we are using templates, functions with the same template params doesn't need to be compiled at each invocation right?
+    template<const std::string_view& fmt, typename... Args>
+    consteval auto compile_format_string()
+    {
+        constexpr size_t str_size = internal::get_formatted_str_length_start<fmt, Args...>();
+        return CompiledFormat<fmt, str_size>{};
+    }
+
+
+    template<const std::string_view& fmt, size_t str_size, typename... Args>
+    constexpr auto format([[maybe_unused]] CompiledFormat<fmt, str_size> compiled_format, Args... args)
+    {
+        FormattedCharArray<str_size> str{};
+
+        size_t str_pos = 0;
+        internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, args...);
+        str.set_effective_size(str_pos);
+
+        return str;
+    }
+
+
     template<const std::string_view& fmt, typename... Args>
     constexpr auto parse_format(Args... args)
     {
@@ -361,7 +458,6 @@ namespace cst_fmt
 
         size_t str_pos = 0;
         internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, args...);
-
         str.set_effective_size(str_pos);
 
         return str;
