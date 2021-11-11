@@ -1,10 +1,11 @@
-
+﻿
 #ifndef CONSTEXPRFORMAT_CONST_FORMAT_H
 #define CONSTEXPRFORMAT_CONST_FORMAT_H
 
 
 #include <array>
 #include <type_traits>
+#include <concepts>
 #include <limits>
 #include <cstddef>
 #include <string_view>
@@ -54,8 +55,10 @@ namespace cst_fmt::utils
     /**
      *  Returns the number of decimal digits needed to represent the given number.
      */
-    constexpr size_t const_log10(std::unsigned_integral auto x)
+    template<typename T>
+    constexpr size_t const_log10(T x)
     {
+    	static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
         while (x > 0) {
             x /= 10;
@@ -63,23 +66,56 @@ namespace cst_fmt::utils
         }
         return i;
     }
+    
+    
+    /**
+     *  Returns the number of decimal digits needed to represent the given number in hexadecimal.
+     */
+    template<typename T>
+    constexpr size_t const_log16(T x)
+    {
+    	static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
+        size_t i = 0;
+        while (x > 0) {
+            x /= 16;
+            i++;
+        }
+        return i;
+    }
 
 
     /**
-     *  Returns 10^p.
+     *  Returns 10^p. Integers only.
      */
-    template<typename T>
-    constexpr T const_10_pow(std::unsigned_integral auto p)
+    template<typename R, typename T>
+    constexpr R const_10_pow(T p)
     {
+        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         if (p == 0) {
             return 1;
         }
         else {
-            T a = 10;
+            R a = 10;
             for (size_t i = 1; i < p; i++) {
                 a *= 10;
             }
             return a;
+        }
+    }
+    
+    
+    /**
+     *  Returns 16^p. Integers only.
+     */
+    template<typename R, typename T>
+    constexpr R const_16_pow(T p)
+    {
+        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
+        if (p == 0) {
+            return 1;
+        }
+        else {
+            return R(16) << (5 * (p - 1));
         }
     }
 }
@@ -92,7 +128,7 @@ namespace cst_fmt::specialisation
     consteval formatted_str_length()
     {
         if constexpr (std::is_signed<T>::value) {
-            // Add some space a potential minus sign
+            // Add one space for a potential minus sign
             return std::numeric_limits<T>::digits10 + 2;
         }
         else {
@@ -108,13 +144,26 @@ namespace cst_fmt::specialisation
         static_assert(std::numeric_limits<T>::is_integer, "Unsupported integer type");
         return 0;
     }
-
-
+    
+    
     template<char fmt, typename T>
-    typename std::enable_if<fmt != 'd', size_t>::type
+    typename std::enable_if<fmt == 'x' && std::numeric_limits<T>::is_integer, size_t>::type
     consteval formatted_str_length()
     {
-        static_assert(fmt == 'd', "Unknown format specifier");
+    	// +2 for the '0x' prefix
+        return 2 + std::numeric_limits<T>::digits / 4 + 1;
+    }
+
+    
+    /*
+     * Default option, used only when 'fmt' is not specified by another definition.
+     * Made to fail in all cases.
+     */
+    template<char fmt, typename T, typename... Args>
+    consteval size_t formatted_str_length(Args...)
+    {
+        static_assert(fmt == '\0', "Unknown format specifier");
+        static_assert(fmt != '\0', "'\0' is not a valid format specifier");
         return 0;
     }
 
@@ -134,7 +183,15 @@ namespace cst_fmt::specialisation
 
         typedef typename std::make_unsigned<T>::type uT;
 
-        size_t val_digits = utils::const_log10(static_cast<uT>(val));
+        size_t val_digits = 0;
+        
+        if (val == 0) {
+        	val_digits = 1;
+        }
+        else {
+        	val_digits = utils::const_log10(static_cast<uT>(val));
+        }
+        
         uT a = utils::const_10_pow<uT>(val_digits - 1);
 
         for (size_t i = 0; i < val_digits; i++) {
@@ -151,13 +208,52 @@ namespace cst_fmt::specialisation
     {
         str[pos++] = val ? '1' : '0';
     }
-
-
+    
+    
     template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt != 'd', void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, [[maybe_unused]] T val)
+    typename std::enable_if<fmt == 'x', void>::type
+    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
-        static_assert(fmt == 'd', "Unknown format specifier");
+        static_assert(std::numeric_limits<T>::is_integer, "Expected an integer type for '%x'");
+        static_assert(!std::is_same<T, bool>::value, "Unsupported bool type for '%x'");
+
+        typedef typename std::make_unsigned<T>::type uT;
+
+        uT u_val = static_cast<uT>(val);
+        size_t val_digits = 0;
+        
+        if (val == 0) {
+        	val_digits = 1;
+        }
+        else {
+        	val_digits = utils::const_log16(u_val);
+        }
+        
+        uT a = utils::const_16_pow<uT>(val_digits - 1);
+        
+        str[pos++] = '0';
+        str[pos++] = 'x';
+        for (size_t i = 0; i < val_digits; i++) {
+        	char c = '0' + (u_val / a);
+        	if (c > '9') {
+        		c += 7; // Shift to the 'A' to 'F' range
+        	}
+            str[pos++] = c;
+            u_val = u_val % a;
+            a /= 16;
+        }
+    }
+
+    
+    /*
+     * Default option, used only when 'fmt' is not specified by another definition.
+     * Made to fail in all cases.
+     */
+    template<char fmt>
+    constexpr void format_to_str(...)
+    {
+        static_assert(fmt == '\0', "Unknown format specifier");
+        static_assert(fmt != '\0', "'\0' is not a valid format specifier");
     }
 }
 
