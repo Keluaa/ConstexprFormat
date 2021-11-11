@@ -12,6 +12,8 @@ set(CMAKE_CXX_STANDARD 20)
 add_library(ConstexprFormat INTERFACE const_format.h)
 
 if (IS_TOP_PROJECT)
-    add_executable(ConstexprFormat_tests main.cpp)
-    target_link_libraries(ConstexprFormat_tests ConstexprFormat)
+    include(CTest)
+
+    add_subdirectory(compilation_tests)
+    add_subdirectory(tests)
 endif()
