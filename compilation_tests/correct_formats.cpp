@@ -1,4 +1,4 @@
-
+﻿
 #include <iostream>
 
 #include "../const_format.h"
@@ -36,6 +36,13 @@ constexpr auto expected = ""sv;
 
 #undef FORMAT_ARGS
 #define FORMAT_ARGS
+
+#elif TEST_NUMBER == 3
+
+// '%s' string format
+const char val_test[] = "hello";
+constexpr auto test_fmt = "%s world"sv;
+constexpr auto expected = "hello world"sv;
 
 #else
 #error "Unknown test number: " TEST_NUMBER

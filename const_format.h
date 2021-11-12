@@ -181,6 +181,10 @@ namespace cst_fmt
  */
 namespace cst_fmt::specialisation
 {
+	//
+	// %d -> decimal number
+	//
+	
     template<char fmt, typename T>
     typename std::enable_if<fmt == 'd' && std::numeric_limits<T>::is_integer, size_t>::type
     consteval formatted_str_length()
@@ -200,29 +204,6 @@ namespace cst_fmt::specialisation
     consteval formatted_str_length()
     {
         static_assert(std::numeric_limits<T>::is_integer, "Unsupported integer type");
-        return 0;
-    }
-    
-    
-    template<char fmt, typename T>
-    typename std::enable_if<fmt == 'x' && std::numeric_limits<T>::is_integer, size_t>::type
-    consteval formatted_str_length()
-    {
-    	// +2 for the '0x' prefix
-        return 2 + std::numeric_limits<T>::digits / 4 + 1;
-    }
-
-    
-    /**
-     * Default option, used only when 'fmt' is not specified by another definition.
-     * Made to fail in all cases.
-     */
-    template<char fmt, typename T, typename... Args>
-    [[maybe_unused]]
-    consteval size_t formatted_str_length(Args...)
-    {
-        static_assert(fmt == '\0', "Unknown format specifier");
-        static_assert(fmt != '\0', "'\0' is not a valid format specifier");
         return 0;
     }
 
@@ -269,6 +250,20 @@ namespace cst_fmt::specialisation
     }
     
     
+    //
+    // %x -> hexadecimal number
+    //
+    
+    
+    template<char fmt, typename T>
+    typename std::enable_if<fmt == 'x' && std::numeric_limits<T>::is_integer, size_t>::type
+    consteval formatted_str_length()
+    {
+    	// +2 for the '0x' prefix
+        return 2 + std::numeric_limits<T>::digits / 4 + 1;
+    }
+    
+    
     template<char fmt, size_t N, typename T>
     typename std::enable_if<fmt == 'x' && !std::is_same_v<T, bool>, void>::type
     constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
@@ -310,6 +305,99 @@ namespace cst_fmt::specialisation
         str[pos++] = '0';
         str[pos++] = 'x';
         str[pos++] = val ? '1' : '0';
+    }
+    
+    
+    // 
+    // %s -> string-like objects
+    //
+    // Only 'char[N]' and 'string_view' of static char arrays are supported.
+    // The length of the string must be known at compile time.
+    // 
+    
+    
+    // char array
+    
+    template<char fmt, typename T>
+    typename std::enable_if<fmt == 's' 
+    		&& std::is_bounded_array_v<T>
+    		&& std::is_same_v<
+    			typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
+    			char>,
+    	size_t>::type
+    consteval formatted_str_length()
+    {
+    	return std::extent_v<T>;
+    }
+    
+    
+    template<char fmt, typename T, typename... Args>
+    [[maybe_unused]]
+    typename std::enable_if<fmt == 's' 
+    	&& !(std::is_bounded_array_v<T> 
+    		&& std::is_same_v<
+    				typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
+    			char>),
+    	size_t>::type
+    consteval formatted_str_length(Args...)
+    {
+        static_assert(fmt == '\0', "'%s' accepts only bounded arrays of char with known size");
+        return 0;
+    }
+    
+    
+    template<char fmt, size_t N, typename T>
+    typename std::enable_if<fmt == 's' 
+    		&& std::is_bounded_array_v<T>
+    		&& std::is_same_v<
+    			typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
+    			char>,
+    	void>::type
+    constexpr format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
+    {
+    	constexpr size_t STR_LEN = std::extent_v<T>;
+    	if constexpr (STR_LEN > 0) {
+    		for (size_t i = 0; i < STR_LEN - 1; i++) {
+	            str[pos + i] = val[i];
+	        }
+	        
+	        // Don't copy the '\0' at the end of the array
+	        if (val[STR_LEN - 1] != '\0') {
+	        	str[pos + STR_LEN - 1] = val[STR_LEN - 1];
+	        	pos += STR_LEN;
+	        }
+	        else {
+	        	pos += STR_LEN - 1;
+	        }
+    	}
+    }
+    
+    
+    template<char fmt, size_t N, typename T>
+    [[maybe_unused]]
+    typename std::enable_if<fmt == 's' 
+    		&& !(std::is_bounded_array_v<T>
+    		&& std::is_same_v<
+    			typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
+    			char>),
+    	void>::type
+    constexpr format_to_str(...)
+    {
+  		static_assert(fmt == '\0', "'%s' accepts only bounded arrays of char with known size");
+    }
+    
+    
+    /**
+     * Default option, used only when 'fmt' is not specified by another definition.
+     * Made to fail in all cases.
+     */
+    template<char fmt, typename T, typename... Args>
+    [[maybe_unused]]
+    consteval size_t formatted_str_length(Args...)
+    {
+        static_assert(fmt == '\0', "Unknown format specifier");
+        static_assert(fmt != '\0', "'\0' is not a valid format specifier");
+        return 0;
     }
 
     

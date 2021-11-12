@@ -1,10 +1,10 @@
-
+﻿
 
 set(COMPILE_FAIL_SOURCE invalid_formats.cpp)
 set(COMPILE_OK_SOURCE correct_formats.cpp)
 
 set(COMPILE_FAIL_TESTS_COUNT 3)
-set(COMPILE_OK_TESTS_COUNT 2)
+set(COMPILE_OK_TESTS_COUNT 3)
 
 
 function(compilation_fail_test test_number)
