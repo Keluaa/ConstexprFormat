@@ -15,6 +15,51 @@
 
 namespace cst_fmt::utils
 {
+	template<size_t N, const char (&STR)[N]>
+	struct CharArrayHolder
+	{
+		static constexpr bool _is_char_array_holder = true;
+		static constexpr size_t size() { return N; }
+		static constexpr const char* get() { return STR; }
+	};
+	
+	
+	template<typename T>
+	concept is_char_array_holder = requires {
+		T::_is_char_array_holder == true;
+	};
+	
+	
+	template<const std::string_view& STR>
+	struct StrViewHolder
+	{
+		static constexpr bool _is_str_view_holder = true;
+		static constexpr const std::string_view& get() { return STR; }
+	};
+	
+	
+	template<typename T>
+	concept is_str_view_holder = requires {
+		T::_is_str_view_holder == true;
+	};
+	
+	
+	template<size_t N>
+	struct DynStrHolder
+	{
+		static constexpr bool _is_dyn_str_holder = true;
+		static constexpr size_t size() { return N; }
+		
+		const char* str;
+	};
+	
+	
+	template<typename T>
+	concept is_dyn_str_holder = requires {
+		T::_is_dyn_str_holder == true;
+	};
+	
+	
     /**
      * Type trait for const iterable types with a size.
      */
@@ -316,74 +361,102 @@ namespace cst_fmt::specialisation
     // 
     
     
+    template<char fmt>
+    concept StringFormat = fmt == 's';
+    
+    
     // char array
     
+    
     template<char fmt, typename T>
-    typename std::enable_if<fmt == 's' 
-    		&& std::is_bounded_array_v<T>
-    		&& std::is_same_v<
-    			typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
-    			char>,
-    	size_t>::type
-    consteval formatted_str_length()
+    	requires StringFormat<fmt> && utils::is_char_array_holder<T>
+    consteval size_t formatted_str_length()
     {
-    	return std::extent_v<T>;
-    }
-    
-    
-    template<char fmt, typename T, typename... Args>
-    [[maybe_unused]]
-    typename std::enable_if<fmt == 's' 
-    	&& !(std::is_bounded_array_v<T> 
-    		&& std::is_same_v<
-    				typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
-    			char>),
-    	size_t>::type
-    consteval formatted_str_length(Args...)
-    {
-        static_assert(fmt == '\0', "'%s' accepts only bounded arrays of char with known size");
-        return 0;
-    }
-    
-    
-    template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 's' 
-    		&& std::is_bounded_array_v<T>
-    		&& std::is_same_v<
-    			typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
-    			char>,
-    	void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
-    {
-    	constexpr size_t STR_LEN = std::extent_v<T>;
-    	if constexpr (STR_LEN > 0) {
-    		for (size_t i = 0; i < STR_LEN - 1; i++) {
-	            str[pos + i] = val[i];
-	        }
-	        
-	        // Don't copy the '\0' at the end of the array
-	        if (val[STR_LEN - 1] != '\0') {
-	        	str[pos + STR_LEN - 1] = val[STR_LEN - 1];
-	        	pos += STR_LEN;
-	        }
-	        else {
-	        	pos += STR_LEN - 1;
-	        }
+    	if constexpr (T::size() == 0) {
+    		return 0;
+    	}
+    	else {
+    		return T::size() - 1;
     	}
     }
     
     
     template<char fmt, size_t N, typename T>
-    [[maybe_unused]]
-    typename std::enable_if<fmt == 's' 
-    		&& !(std::is_bounded_array_v<T>
-    		&& std::is_same_v<
-    			typename std::remove_cv<typename std::remove_extent<T>::type>::type, 
-    			char>),
-    	void>::type
-    constexpr format_to_str(...)
+    	requires StringFormat<fmt> && utils::is_char_array_holder<T>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
     {
-  		static_assert(fmt == '\0', "'%s' accepts only bounded arrays of char with known size");
+    	if constexpr (T::size() > 1) {
+    		constexpr size_t STR_LEN = T::size() - 1;
+    		for (size_t i = 0; i < STR_LEN; i++) {
+    			str[pos + i] = T::get()[i];
+    		}
+    		pos += STR_LEN;
+    	}
+    }
+    
+    
+    // string_view
+    
+    
+    template<char fmt, typename T>
+    	requires StringFormat<fmt> && utils::is_str_view_holder<T>
+    consteval size_t formatted_str_length()
+    {
+    	return T::get().size();
+    }
+    
+    
+    template<char fmt, size_t N, typename T>
+    	requires StringFormat<fmt> && utils::is_str_view_holder<T>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
+    {
+    	constexpr size_t STR_LEN = T::get().size();
+    	for (size_t i = 0; i < STR_LEN; i++) {
+    		str[pos + i] = T::get()[i];
+    	}
+    	pos += STR_LEN;
+    }
+    
+    
+    // Non-const string
+    
+    
+    template<char fmt, typename T>
+    	requires StringFormat<fmt> && utils::is_dyn_str_holder<T>
+    consteval size_t formatted_str_length()
+    {
+    	if constexpr (T::size() == 0) {
+    		return 0;
+    	}
+    	else {
+    		return T::size() - 1;
+    	}
+    }
+    
+    
+    template<char fmt, size_t N, typename T>
+    	requires StringFormat<fmt> && utils::is_dyn_str_holder<T>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
+    {
+    	if constexpr (T::size() > 1) {
+    		constexpr size_t STR_LEN = T::size() - 1;
+    		for (size_t i = 0; i < STR_LEN; i++) {
+    			str[pos + i] = val.str[i];
+    		}
+    		pos += STR_LEN;
+    	}
+    }
+    
+    
+    template<char fmt, typename T>
+    	requires StringFormat<fmt> 
+    		&& (!utils::is_char_array_holder<T>)
+    		&& (!utils::is_str_view_holder<T>)
+    		&& (!utils::is_dyn_str_holder<T>)
+    consteval size_t formatted_str_length()
+    {
+        static_assert(fmt == '\0', "'%s' expected a string view (or char array) holder");
+        return 0;
     }
     
     
@@ -515,7 +588,31 @@ namespace cst_fmt::internal
 
 
 namespace cst_fmt
-{
+{	
+	/**
+	 * Static char array reference holder.
+	 * It is assumed that the last character of the array (at N-1) is '\0', and will not be copied.
+	 */
+	template<size_t N, const char (&STR)[N]>
+	using cstr_ref = utils::CharArrayHolder<N, STR>;
+	
+	
+	/**
+	 * Static string view reference holder.
+	 * All characters (even '\0') of the string view will be copied.
+	 */
+	template<const std::string_view& STR>
+	using str_ref = utils::StrViewHolder<STR>;
+	
+	
+	/**
+	 * Non-const string with static fixed size reference holder.
+	 * It is assumed that the last character of the array (at N-1) is '\0', and will not be copied.
+	 */
+	template<size_t N>
+	using dyn_str = utils::DynStrHolder<N>;
+	
+	
     // TODO : check if this could actually reduce compilation time, since we are using templates, functions with the same template params doesn't need to be compiled at each invocation right?
     template<const std::string_view& fmt, typename... Args>
     consteval auto compile_format_string()
@@ -545,6 +642,7 @@ namespace cst_fmt
         FormattedCharArray<str_size> str{};
 
         size_t str_pos = 0;
+        // TODO : std::forward(args)... and use only r-values in parameters
         internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, args...);
         str.set_effective_size(str_pos);
 

@@ -39,10 +39,27 @@ constexpr auto expected = ""sv;
 
 #elif TEST_NUMBER == 3
 
-// '%s' string format
-const char val_test[] = "hello";
+// '%s' string format with a string view
+constexpr auto val_view = "hello"sv;
+constexpr cst_fmt::str_ref<val_view> val_test;
 constexpr auto test_fmt = "%s world"sv;
 constexpr auto expected = "hello world"sv;
+
+#elif TEST_NUMBER == 4
+
+// '%s' string format with a char array
+constexpr const char val_cstr[6] = "hello";
+constexpr cst_fmt::cstr_ref<6, val_cstr> val_test;
+constexpr auto test_fmt = "%s world"sv;
+constexpr auto expected = "hello world"sv;
+
+#elif TEST_NUMBER == 5
+
+// '%s' string format with a non-const char array
+typedef cst_fmt::dyn_str<6> val_test;
+constexpr auto test_fmt = "%s world"sv;
+
+#define ONLY_COMPILE
 
 #else
 #error "Unknown test number: " TEST_NUMBER
@@ -51,7 +68,12 @@ constexpr auto expected = "hello world"sv;
 
 int main()
 {
+#ifndef ONLY_COMPILE
     constexpr auto str = cst_fmt::parse_format<test_fmt>(FORMAT_ARGS);
     std::cout << "'" <<  str << "'\n";
+    static_assert(str == expected);
     return str == expected;
+#else
+    constexpr auto str = cst_fmt::compile_format_string<test_fmt, FORMAT_ARGS>();
+#endif
 }

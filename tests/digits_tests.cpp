@@ -1,10 +1,5 @@
-
-#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "doctest.h"
-
-#include "../const_format.h"
-
-using namespace std::literals::string_view_literals;
+﻿
+#include "tests.h"
 
 
 TEST_CASE("%d format")
