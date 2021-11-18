@@ -59,18 +59,13 @@ namespace cst_fmt::utils
 		T::_is_dyn_str_holder == true;
 	};
 	
-	
-    /**
-     * Type trait for const iterable types with a size.
-     */
-    template <typename T, typename = void>
-    struct is_const_iterable : std::false_type {};
-    template <typename T>
-    struct is_const_iterable<T,
-            std::void_t<decltype(std::declval<T>().cbegin()),
-                        decltype(std::declval<T>().cend()),
-                        decltype(std::declval<T>().size())>>
-            : std::true_type {};
+
+    template<typename T>
+    concept is_const_iterable = requires (const T& val) {
+        val.cbegin();
+        val.cend();
+        val.size();
+    };
 
 
     /**
@@ -151,10 +146,10 @@ namespace cst_fmt
     struct CompiledFormat
     {
         [[nodiscard]]
-        constexpr const std::string_view& get_fmt() const { return fmt; }
+        static constexpr const std::string_view& get_fmt() { return fmt; }
 
         [[nodiscard]]
-        constexpr size_t get_str_size() const { return N; }
+        static constexpr size_t get_str_size() { return N; }
     };
 
 
@@ -188,8 +183,8 @@ namespace cst_fmt
 
 
         template<typename T>
-        typename std::enable_if<utils::is_const_iterable<T>::value, bool>::type
-        constexpr operator==(const T& array) const
+            requires utils::is_const_iterable<T>
+        constexpr bool operator==(const T& array) const
         {
             if (m_effective_size != array.size()) {
                 return false;
@@ -200,8 +195,8 @@ namespace cst_fmt
 
 
         template<typename T>
-        typename std::enable_if<utils::is_const_iterable<T>::value, bool>::type
-        constexpr operator!=(const T& array) const
+            requires utils::is_const_iterable<T>
+        constexpr bool operator!=(const T& array) const
         {
             if (m_effective_size != array.size()) {
                 return true;
@@ -390,7 +385,6 @@ namespace cst_fmt::specialisation
     		for (size_t i = 0; i < STR_LEN; i++) {
     			str[pos + i] = T::get()[i];
     		}
-    		pos += STR_LEN;
     	}
     }
     
@@ -438,13 +432,14 @@ namespace cst_fmt::specialisation
     	requires StringFormat<fmt> && utils::is_dyn_str_holder<T>
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
-    	if constexpr (T::size() > 1) {
-    		constexpr size_t STR_LEN = T::size() - 1;
-    		for (size_t i = 0; i < STR_LEN; i++) {
-    			str[pos + i] = val.str[i];
-    		}
-    		pos += STR_LEN;
-    	}
+        if constexpr (T::size() > 0) {
+            constexpr size_t STR_LEN = T::size();
+            for (size_t i = 0; i < STR_LEN; i++) {
+                char c = val.str[i];
+                if (c == '\0') { break; }
+                str[pos++] = c;
+            }
+        }
     }
     
     
@@ -464,7 +459,7 @@ namespace cst_fmt::specialisation
      * Default option, used only when 'fmt' is not specified by another definition.
      * Made to fail in all cases.
      */
-    template<char fmt, typename T, typename... Args>
+    template<char fmt, typename, typename... Args>
     [[maybe_unused]]
     consteval size_t formatted_str_length(Args...)
     {
@@ -595,8 +590,8 @@ namespace cst_fmt
 	 */
 	template<size_t N, const char (&STR)[N]>
 	using cstr_ref = utils::CharArrayHolder<N, STR>;
-	
-	
+
+
 	/**
 	 * Static string view reference holder.
 	 * All characters (even '\0') of the string view will be copied.
@@ -607,7 +602,8 @@ namespace cst_fmt
 	
 	/**
 	 * Non-const string with static fixed size reference holder.
-	 * It is assumed that the last character of the array (at N-1) is '\0', and will not be copied.
+	 * Up to N characters will be copied to the resulting string. The copy will stop before the first '\0' character
+	 * encountered.
 	 */
 	template<size_t N>
 	using dyn_str = utils::DynStrHolder<N>;
