@@ -171,6 +171,9 @@ namespace cst_fmt
         constexpr size_t effective_size() const { return m_effective_size; }
 
         [[nodiscard]]
+        constexpr const char* cstr() const { return data(); }
+
+        [[nodiscard]]
         constexpr std::string_view view() const { return std::string_view(data(), m_effective_size); }
 
 
@@ -287,7 +290,7 @@ namespace cst_fmt::specialisation
 
     template<char fmt, size_t N, typename T>
      	requires decimal_format<fmt> && std::is_integral_v<T> && std::same_as<T, bool>
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
         str[pos++] = val ? '1' : '0';
     }
@@ -295,7 +298,7 @@ namespace cst_fmt::specialisation
     
     template<char fmt, size_t N, typename T>
      	requires decimal_format<fmt> && (!std::is_integral_v<T>)
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
     {
     	static_assert(fmt == '\0', "'%d' expected an integral type");
     }
@@ -330,7 +333,7 @@ namespace cst_fmt::specialisation
     
     template<char fmt, size_t N, typename T>
     	requires hex_format<fmt> && std::is_integral_v<T> && (!std::same_as<T, bool>)
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
         typedef typename std::make_unsigned<T>::type uT;
 
@@ -362,7 +365,7 @@ namespace cst_fmt::specialisation
 
     template<char fmt, size_t N, typename T>
      	requires hex_format<fmt> && std::is_integral_v<T> && std::same_as<T, bool>
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
         str[pos++] = '0';
         str[pos++] = 'x';
@@ -372,7 +375,7 @@ namespace cst_fmt::specialisation
     
     template<char fmt, size_t N, typename T>
      	requires hex_format<fmt> && (!std::is_integral_v<T>)
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
     {
     	static_assert(fmt == '\0', "'%x' expected an integral type");
     }
@@ -384,16 +387,14 @@ namespace cst_fmt::specialisation
     
     
     template<char fmt>
-    concept StringFormat = fmt == 's';
+    concept string_format = fmt == 's';
     
     
     // char array
     
     
     template<char fmt, typename T>
-    	requires StringFormat<fmt>
-    		&& (utils::is_char_array_holder<T> 
-    			|| utils::is_dyn_str_holder<T>)
+    	requires string_format<fmt> && (utils::is_char_array_holder<T> || utils::is_dyn_str_holder<T>)
     consteval size_t formatted_str_length()
     {
     	if constexpr (T::size() == 0) {
@@ -406,9 +407,7 @@ namespace cst_fmt::specialisation
     
     
     template<char fmt, size_t N, typename T>
-    	requires StringFormat<fmt> 
-    		&& (utils::is_char_array_holder<T>
-    			|| utils::is_dyn_str_holder<T>)
+    	requires string_format<fmt> && (utils::is_char_array_holder<T> || utils::is_dyn_str_holder<T>)
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
         if constexpr (T::size() > 0) {
@@ -432,7 +431,7 @@ namespace cst_fmt::specialisation
     
     
     template<char fmt, typename T>
-    	requires StringFormat<fmt> && utils::is_str_view_holder<T>
+    	requires string_format<fmt> && utils::is_str_view_holder<T>
     consteval size_t formatted_str_length()
     {
     	return T::get().size();
@@ -440,7 +439,7 @@ namespace cst_fmt::specialisation
     
     
     template<char fmt, size_t N, typename T>
-    	requires StringFormat<fmt> && utils::is_str_view_holder<T>
+    	requires string_format<fmt> && utils::is_str_view_holder<T>
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
     {
     	constexpr size_t STR_LEN = T::get().size();
@@ -455,10 +454,10 @@ namespace cst_fmt::specialisation
     
     
     template<char fmt, typename T>
-    	requires StringFormat<fmt> 
-    		&& (!utils::is_char_array_holder<T>)
-    		&& (!utils::is_str_view_holder<T>)
-    		&& (!utils::is_dyn_str_holder<T>)
+    	requires string_format<fmt>
+                 && (!utils::is_char_array_holder<T>)
+                 && (!utils::is_str_view_holder<T>)
+                 && (!utils::is_dyn_str_holder<T>)
     consteval size_t formatted_str_length()
     {
         static_assert(fmt == '\0', "'%s' expected a string view (or char array) holder");
@@ -472,7 +471,7 @@ namespace cst_fmt::specialisation
      */
     template<char fmt, typename, typename... Args>
     [[maybe_unused]]
-    consteval size_t formatted_str_length(Args...)
+    consteval size_t formatted_str_length(const Args&...)
     {
         static_assert(fmt == '\0', "Unknown format specifier");
         static_assert(fmt != '\0', "'\\0' is not a valid format specifier");
@@ -528,7 +527,7 @@ namespace cst_fmt::internal
         static_assert(nxt != std::string_view::npos, "Too many arguments for format string");
 
         return nxt - pos - 1 // Characters of the format string from the previous format to the next one, excluding the '%'
-               + specialisation::formatted_str_length<fmt[nxt], T>() // Maximum length of the formatted type
+               + specialisation::formatted_str_length<fmt[nxt], std::remove_reference_t<T>>() // Maximum length of the formatted type
                + get_formatted_str_length<fmt, nxt + 1, Args...>();
     }
 
@@ -578,7 +577,7 @@ namespace cst_fmt::internal
 
 
     template<const std::string_view& fmt, size_t N, size_t pos = 0, typename T, typename... Args>
-    constexpr void parse_format_internal(std::array<char, N>& str, size_t& str_pos, T val, Args... args)
+    constexpr void parse_format_internal(std::array<char, N>& str, size_t& str_pos, const T& val, Args&&... args)
     {
         constexpr size_t nxt = next_format<fmt, pos>();
 
@@ -588,13 +587,13 @@ namespace cst_fmt::internal
         // Format the value
         specialisation::format_to_str<fmt[nxt]>(str, str_pos, val);
 
-        parse_format_internal<fmt, N, nxt + 1>(str, str_pos, args...);
+        parse_format_internal<fmt, N, nxt + 1>(str, str_pos, std::forward<Args>(args)...);
     }
 }
 
 
 namespace cst_fmt
-{	
+{
 	/**
 	 * Static char array reference holder.
 	 * The copy will stop before the first '\0' character encountered.
@@ -619,38 +618,47 @@ namespace cst_fmt
 	template<const std::string_view& STR>
 	using str_ref = utils::StrViewHolder<STR>;
 
-	
-    // TODO : check if this could actually reduce compilation time, since we are using templates, functions with the same template params doesn't need to be compiled at each invocation right?
+
+    /**
+     * Parses the given format string and returns information reusable for calls to 'cst_fmt::format'.
+     */
     template<const std::string_view& fmt, typename... Args>
-    consteval auto compile_format_string()
+    consteval auto compile_format()
     {
         constexpr size_t str_size = internal::get_formatted_str_length_start<fmt, Args...>();
         return CompiledFormat<fmt, str_size>{};
     }
 
 
+    /**
+     * Formats the given arguments by using the information returned by 'cst_fmt::format'.
+     */
     template<const std::string_view& fmt, size_t str_size, typename... Args>
-    constexpr auto format([[maybe_unused]] CompiledFormat<fmt, str_size> compiled_format, Args... args)
+    constexpr auto format([[maybe_unused]] CompiledFormat<fmt, str_size> compiled_format, Args&&... args)
     {
         FormattedCharArray<str_size> str{};
 
         size_t str_pos = 0;
-        internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, args...);
+        internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, std::forward<Args>(args)...);
         str.set_effective_size(str_pos);
 
         return str;
     }
 
 
+    /**
+     * Formats the arguments into a FormattedCharArray, which is a std::array<char, N> which length is determined solely
+     * on the format string. This result can be converted to a string_view, string or const char*.
+     * The format must be a static constexpr string_view.
+     */
     template<const std::string_view& fmt, typename... Args>
-    constexpr auto parse_format(Args... args)
+    constexpr auto format(Args&&... args)
     {
         constexpr size_t str_size = internal::get_formatted_str_length_start<fmt, Args...>();
         FormattedCharArray<str_size> str{};
 
         size_t str_pos = 0;
-        // TODO : std::forward(args)... and use only r-values in parameters
-        internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, args...);
+        internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, std::forward<Args>(args)...);
         str.set_effective_size(str_pos);
 
         return str;

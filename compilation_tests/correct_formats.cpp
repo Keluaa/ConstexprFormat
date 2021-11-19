@@ -69,11 +69,11 @@ constexpr auto test_fmt = "%s world"sv;
 int main()
 {
 #ifndef ONLY_COMPILE
-    constexpr auto str = cst_fmt::parse_format<test_fmt>(FORMAT_ARGS);
+    constexpr auto str = cst_fmt::format<test_fmt>(FORMAT_ARGS);
     std::cout << "'" <<  str << "'\n";
     static_assert(str == expected);
     return str == expected;
 #else
-    constexpr auto str = cst_fmt::compile_format_string<test_fmt, FORMAT_ARGS>();
+    constexpr auto str = cst_fmt::compile_format<test_fmt, FORMAT_ARGS>();
 #endif
 }

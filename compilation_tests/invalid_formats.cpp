@@ -52,7 +52,7 @@ constexpr auto val_test = 42;
 
 int main()
 {
-    constexpr auto str = cst_fmt::parse_format<test_fmt>(FORMAT_ARGS);
+    constexpr auto str = cst_fmt::format<test_fmt>(FORMAT_ARGS);
     std::cout << str << "\n";
     return 0;
 }
