@@ -391,26 +391,38 @@ namespace cst_fmt::specialisation
     
     
     template<char fmt, typename T>
-    	requires StringFormat<fmt> && utils::is_char_array_holder<T>
+    	requires StringFormat<fmt>
+    		&& (utils::is_char_array_holder<T> 
+    			|| utils::is_dyn_str_holder<T>)
     consteval size_t formatted_str_length()
     {
     	if constexpr (T::size() == 0) {
     		return 0;
     	}
     	else {
-    		return T::size() - 1;
+    		return T::size();
     	}
     }
     
     
     template<char fmt, size_t N, typename T>
-    	requires StringFormat<fmt> && utils::is_char_array_holder<T>
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
+    	requires StringFormat<fmt> 
+    		&& (utils::is_char_array_holder<T>
+    			|| utils::is_dyn_str_holder<T>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
-    	if constexpr (T::size() > 0) {
-            constexpr size_t STR_LEN = T::size() - 1;
+        if constexpr (T::size() > 0) {
+            constexpr size_t STR_LEN = T::size();
             for (size_t i = 0; i < STR_LEN; i++) {
-                str[pos++] = T::get()[i];
+                char c;
+                if constexpr (utils::is_char_array_holder<T>) {
+                	c = T::get()[i];
+                }
+                else {
+                	c = val.str[i];
+                }
+                if (c == '\0') { break; }
+                str[pos++] = c;
             }
         }
     }
@@ -436,37 +448,6 @@ namespace cst_fmt::specialisation
     		str[pos + i] = T::get()[i];
     	}
     	pos += STR_LEN;
-    }
-    
-    
-    // Non-const string
-    
-    
-    template<char fmt, typename T>
-    	requires StringFormat<fmt> && utils::is_dyn_str_holder<T>
-    consteval size_t formatted_str_length()
-    {
-    	if constexpr (T::size() == 0) {
-    		return 0;
-    	}
-    	else {
-    		return T::size() - 1;
-    	}
-    }
-    
-    
-    template<char fmt, size_t N, typename T>
-    	requires StringFormat<fmt> && utils::is_dyn_str_holder<T>
-    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
-    {
-        if constexpr (T::size() > 0) {
-            constexpr size_t STR_LEN = T::size();
-            for (size_t i = 0; i < STR_LEN; i++) {
-                char c = val.str[i];
-                if (c == '\0') { break; }
-                str[pos++] = c;
-            }
-        }
     }
     
     
@@ -616,28 +597,28 @@ namespace cst_fmt
 {	
 	/**
 	 * Static char array reference holder.
-	 * It is assumed that the last character of the array (at N-1) is '\0', and will not be copied.
+	 * The copy will stop before the first '\0' character encountered.
 	 */
 	template<size_t N, const char (&STR)[N]>
 	using cstr_ref = utils::CharArrayHolder<N, STR>;
+	
+	
+	/**
+	 * Non-const string with static fixed size reference holder.
+	 * Up to N characters will be copied to the resulting string.
+	 * The copy will stop before the first '\0' character encountered.
+	 */
+	template<size_t N>
+	using cstr = utils::DynStrHolder<N>;
 
-
+	
 	/**
 	 * Static string view reference holder.
 	 * All characters (even '\0') of the string view will be copied.
 	 */
 	template<const std::string_view& STR>
 	using str_ref = utils::StrViewHolder<STR>;
-	
-	
-	/**
-	 * Non-const string with static fixed size reference holder.
-	 * Up to N characters will be copied to the resulting string. The copy will stop before the first '\0' character
-	 * encountered.
-	 */
-	template<size_t N>
-	using dyn_str = utils::DynStrHolder<N>;
-	
+
 	
     // TODO : check if this could actually reduce compilation time, since we are using templates, functions with the same template params doesn't need to be compiled at each invocation right?
     template<const std::string_view& fmt, typename... Args>

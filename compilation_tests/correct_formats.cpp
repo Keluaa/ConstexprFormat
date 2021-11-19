@@ -56,7 +56,7 @@ constexpr auto expected = "hello world"sv;
 #elif TEST_NUMBER == 5
 
 // '%s' string format with a non-const char array
-typedef cst_fmt::dyn_str<6> val_test;
+typedef cst_fmt::cstr<6> val_test;
 constexpr auto test_fmt = "%s world"sv;
 
 #define ONLY_COMPILE
