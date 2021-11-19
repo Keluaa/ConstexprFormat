@@ -225,11 +225,16 @@ namespace cst_fmt::specialisation
 	// %d -> decimal number
 	//
 	
+	
+	template<char fmt>
+	concept decimal_format = fmt == 'd';
+	
+	
     template<char fmt, typename T>
-    typename std::enable_if<fmt == 'd' && std::numeric_limits<T>::is_integer, size_t>::type
-    consteval formatted_str_length()
+    	requires decimal_format<fmt> && std::is_integral_v<T>
+    consteval size_t formatted_str_length()
     {
-        if constexpr (std::is_signed<T>::value) {
+        if constexpr (std::is_signed_v<T>) {
             // Add one space for a potential minus sign
             return std::numeric_limits<T>::digits10 + 2;
         }
@@ -240,20 +245,18 @@ namespace cst_fmt::specialisation
 
 
     template<char fmt, typename T>
-    typename std::enable_if<fmt == 'd' && !std::numeric_limits<T>::is_integer, size_t>::type
-    consteval formatted_str_length()
+    	requires decimal_format<fmt> && (!std::is_integral_v<T>)
+    consteval size_t formatted_str_length()
     {
-        static_assert(std::numeric_limits<T>::is_integer, "Unsupported integer type");
+        static_assert(fmt == '\0', "'%d' expected an integral type");
         return 0;
     }
 
 
     template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 'd' && !std::is_same_v<T, bool>, void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    	requires decimal_format<fmt> && std::is_integral_v<T> && (!std::same_as<T, bool>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
-        static_assert(std::numeric_limits<T>::is_integer, "Expected an integer type for '%d'");
-
         if constexpr (std::is_signed<T>::value) {
             if (val < 0) {
                 str[pos++] = '-';
@@ -283,10 +286,18 @@ namespace cst_fmt::specialisation
 
 
     template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 'd' && std::is_same_v<T, bool>, void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
+     	requires decimal_format<fmt> && std::is_integral_v<T> && std::same_as<T, bool>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
         str[pos++] = val ? '1' : '0';
+    }
+    
+    
+    template<char fmt, size_t N, typename T>
+     	requires decimal_format<fmt> && (!std::is_integral_v<T>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    {
+    	static_assert(fmt == '\0', "'%d' expected an integral type");
     }
     
     
@@ -295,21 +306,32 @@ namespace cst_fmt::specialisation
     //
     
     
+	template<char fmt>
+	concept hex_format = fmt == 'x';
+	
+    
     template<char fmt, typename T>
-    typename std::enable_if<fmt == 'x' && std::numeric_limits<T>::is_integer, size_t>::type
-    consteval formatted_str_length()
+    	requires hex_format<fmt> && std::is_integral_v<T>
+    consteval size_t formatted_str_length()
     {
     	// +2 for the '0x' prefix
         return 2 + std::numeric_limits<T>::digits / 4 + 1;
     }
     
     
-    template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 'x' && !std::is_same_v<T, bool>, void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    template<char fmt, typename T>
+    	requires hex_format<fmt> && (!std::is_integral_v<T>)
+    consteval size_t formatted_str_length()
     {
-        static_assert(std::numeric_limits<T>::is_integer, "Expected an integer type for '%x'");
-
+        static_assert(fmt == '\0', "'%x' expected an integral type");
+        return 0;
+    }
+    
+    
+    template<char fmt, size_t N, typename T>
+    	requires hex_format<fmt> && std::is_integral_v<T> && (!std::same_as<T, bool>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    {
         typedef typename std::make_unsigned<T>::type uT;
 
         uT u_val = static_cast<uT>(val);
@@ -339,8 +361,8 @@ namespace cst_fmt::specialisation
 
 
     template<char fmt, size_t N, typename T>
-    typename std::enable_if<fmt == 'x' && std::is_same_v<T, bool>, void>::type
-    constexpr format_to_str(std::array<char, N>& str, size_t& pos, T val)
+     	requires hex_format<fmt> && std::is_integral_v<T> && std::same_as<T, bool>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
         str[pos++] = '0';
         str[pos++] = 'x';
@@ -348,12 +370,17 @@ namespace cst_fmt::specialisation
     }
     
     
+    template<char fmt, size_t N, typename T>
+     	requires hex_format<fmt> && (!std::is_integral_v<T>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
+    {
+    	static_assert(fmt == '\0', "'%x' expected an integral type");
+    }
+    
+    
     // 
     // %s -> string-like objects
     //
-    // Only 'char[N]' and 'string_view' of static char arrays are supported.
-    // The length of the string must be known at compile time.
-    // 
     
     
     template<char fmt>
@@ -380,12 +407,12 @@ namespace cst_fmt::specialisation
     	requires StringFormat<fmt> && utils::is_char_array_holder<T>
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
     {
-    	if constexpr (T::size() > 1) {
-    		constexpr size_t STR_LEN = T::size() - 1;
-    		for (size_t i = 0; i < STR_LEN; i++) {
-    			str[pos + i] = T::get()[i];
-    		}
-    	}
+    	if constexpr (T::size() > 0) {
+            constexpr size_t STR_LEN = T::size() - 1;
+            for (size_t i = 0; i < STR_LEN; i++) {
+                str[pos++] = T::get()[i];
+            }
+        }
     }
     
     
@@ -443,6 +470,9 @@ namespace cst_fmt::specialisation
     }
     
     
+    // Wrong string argument
+    
+    
     template<char fmt, typename T>
     	requires StringFormat<fmt> 
     		&& (!utils::is_char_array_holder<T>)
@@ -464,7 +494,7 @@ namespace cst_fmt::specialisation
     consteval size_t formatted_str_length(Args...)
     {
         static_assert(fmt == '\0', "Unknown format specifier");
-        static_assert(fmt != '\0', "'\0' is not a valid format specifier");
+        static_assert(fmt != '\0', "'\\0' is not a valid format specifier");
         return 0;
     }
 
@@ -478,7 +508,7 @@ namespace cst_fmt::specialisation
     constexpr void format_to_str(...)
     {
         static_assert(fmt == '\0', "Unknown format specifier");
-        static_assert(fmt != '\0', "'\0' is not a valid format specifier");
+        static_assert(fmt != '\0', "'\\0' is not a valid format specifier");
     }
 }
 
