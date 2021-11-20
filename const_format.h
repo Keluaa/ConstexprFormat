@@ -463,10 +463,63 @@ namespace cst_fmt::specialisation
         static_assert(fmt == '\0', "'%s' expected a string view (or char array) holder");
         return 0;
     }
-    
+
+
+    template<char fmt, size_t N, typename T>
+        requires string_format<fmt>
+             && (!utils::is_char_array_holder<T>)
+             && (!utils::is_str_view_holder<T>)
+             && (!utils::is_dyn_str_holder<T>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
+    {
+        static_assert(fmt == '\0', "'%s' expected a string view (or char array) holder");
+    }
+
+
+    //
+    // %c -> character
+    //
+
+
+    template<char fmt>
+    concept char_format = fmt == 'c';
+
+
+    template<char fmt, typename T>
+        requires char_format<fmt> && std::same_as<std::remove_cv_t<T>, char>
+    consteval size_t formatted_str_length()
+    {
+        return 1;
+    }
+
+
+    template<char fmt, typename T>
+        requires char_format<fmt> && (!std::same_as<std::remove_cv_t<T>, char>)
+    consteval size_t formatted_str_length()
+    {
+        static_assert(fmt == '\0', "'%c' expected a char type");
+        return 0;
+    }
+
+
+    template<char fmt, size_t N, typename T>
+        requires char_format<fmt> && std::same_as<std::remove_cv_t<T>, char>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
+    {
+        str[pos++] = val;
+    }
+
+
+    template<char fmt, size_t N, typename T>
+        requires char_format<fmt> && (!std::same_as<std::remove_cv_t<T>, char>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
+    {
+        static_assert(fmt == '\0', "'%c' expected a char type");
+    }
+
     
     /**
-     * Default option, used only when 'fmt' is not specified by another definition.
+     * Fallback option, used only when 'fmt' is not specified by another definition.
      * Made to fail in all cases.
      */
     template<char fmt, typename, typename... Args>
@@ -480,7 +533,7 @@ namespace cst_fmt::specialisation
 
     
     /**
-     * Default option, used only when 'fmt' is not specified by another definition.
+     * Fallback option, used only when 'fmt' is not specified by another definition.
      * Made to fail in all cases.
      */
     template<char fmt>

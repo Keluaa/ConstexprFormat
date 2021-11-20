@@ -90,3 +90,23 @@ TEST_CASE("%s dynamic char array")
         CHECK_EQ(result, expected);
     }
 }
+
+
+TEST_CASE("%c character")
+{
+    SUBCASE("h")
+    {
+        static constexpr auto fmt_str = "%cello world"sv;
+        constexpr auto result = cst_fmt::format<fmt_str>('h');
+        constexpr auto expected = "hello world"sv;
+        CHECK_EQ(result, expected);
+    }
+
+    SUBCASE("\\0")
+    {
+        static constexpr auto fmt_str = "hello %c world"sv;
+        constexpr auto result = cst_fmt::format<fmt_str>('\0');
+        constexpr auto expected = "hello \0 world"sv;
+        CHECK_EQ(result, expected);
+    }
+}
