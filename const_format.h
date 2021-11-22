@@ -7,7 +7,11 @@
 #include <type_traits>
 #include <concepts>
 #include <limits>
+#include <bit>
+#include <tuple>
 #include <cstddef>
+#include <cstdint>
+#include <cmath>
 #include <string_view>
 #include <string>
 #include <ostream>
@@ -134,6 +138,34 @@ namespace cst_fmt::utils
             return R(16) << (4 * (p - 1));
         }
     }
+
+
+    constexpr std::tuple<bool, int8_t, uint32_t> split_floating_number(const float& val)
+    {
+        // Single: 1 bit sign, 8 bits exponent, 23 bits mantissa
+        auto bits = std::bit_cast<uint32_t, float>(val);
+        bool sign = bits & (0x1 << 31);
+        uint8_t encoded_exp = (bits & (0xFF << 23)) >> 23;
+        auto exp = int8_t(encoded_exp);
+        exp -= 127; // Decode the exponent
+        uint32_t mantissa = bits & 0x00'7F'FF'FF;
+        mantissa |= 0x1 << 24; // Add the implicit one at the start of the mantissa
+        return { sign, exp, mantissa };
+    }
+
+
+    constexpr std::tuple<bool, int16_t, uint64_t> split_floating_number(const double& val)
+    {
+        // Double: 1 bit sign, 11 bits exponent, 52 bits mantissa
+        auto bits = std::bit_cast<uint64_t, double>(val);
+        bool sign = bits & (0x1l << 63);
+        uint16_t encoded_exp = uint64_t(bits & (0x0F'FFl << 52)) >> 52;
+        auto exp = int16_t(encoded_exp);
+        exp -= 1023; // Decode the exponent
+        uint64_t mantissa = bits & ~(0x0F'FFl << 52);
+        mantissa |= 0x1l << 53; // Add the implicit one at the start of the mantissa
+        return { sign, exp, mantissa };
+    }
 }
 
 
@@ -155,7 +187,6 @@ namespace cst_fmt
 
     /**
      * A constant size, string-like object.
-     *
      */
     template<size_t N>
     class FormattedCharArray : public std::array<char, N>
@@ -379,7 +410,111 @@ namespace cst_fmt::specialisation
     {
     	static_assert(fmt == '\0', "'%x' expected an integral type");
     }
-    
+
+
+    //
+    // %f -> floating point numbers
+    //
+
+
+    template<char fmt>
+    concept float_format = fmt == 'f';
+
+
+    template<char fmt, typename T>
+        requires float_format<fmt> && std::is_floating_point_v<T>
+    consteval size_t formatted_str_length()
+    {
+        // sign + comma + number of digits for exact representation + exponent 'e' + exponent sign + exponent length
+        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 + utils::const_log10(std::numeric_limits<T>::max_exponent10);
+    }
+
+
+    template<char fmt, typename T>
+        requires float_format<fmt> && (!std::is_floating_point_v<T>)
+    consteval size_t formatted_str_length()
+    {
+        static_assert(fmt == '\0', "'%f' expected an floating point type");
+        return 0;
+    }
+
+
+    template<char fmt, size_t N, typename T>
+        requires float_format<fmt> && std::is_floating_point_v<T>
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
+    {
+        // Handle edge cases
+        if (std::isnan(val)) {
+            str[pos++] = 'N';
+            str[pos++] = 'a';
+            str[pos++] = 'N';
+            return;
+        }
+        if (std::isinf(val)) {
+            if (val < 0) {
+                str[pos++] = '-';
+            }
+            str[pos++] = 'i';
+            str[pos++] = 'n';
+            str[pos++] = 'f';
+            return;
+        }
+
+        bool subnormal = !std::isnormal(val);
+
+        auto&& [ sign, exponent, mantissa ] = utils::split_floating_number(val);
+
+        if (sign) {
+            str[pos++] = '-';
+        }
+
+        typedef typename std::make_unsigned<decltype(mantissa)>::type uT;
+
+        size_t val_digits = 0;
+
+        if (val == 0) {
+            val_digits = 1;
+        }
+        else {
+            val_digits = utils::const_log10(static_cast<uT>(mantissa));
+        }
+
+        uT a = utils::const_10_pow<uT>(val_digits - 1);
+
+        for (size_t i = 0; i < val_digits; i++) {
+            str[pos++] = '0' + (mantissa / a);
+            mantissa = mantissa % a;
+            a /= 10;
+        }
+
+        if (exponent != 0) {
+            str[pos++] = 'e';
+
+            if (exponent < 0) {
+                str[pos++] = '-';
+                exponent = -exponent;
+            }
+
+            typedef typename std::make_unsigned<decltype(exponent)>::type uExp;
+            size_t exp_digits = utils::const_log10(static_cast<uExp>(exponent));
+            uExp a_exp = utils::const_10_pow<uExp>(exp_digits - 1);
+
+            for (size_t i = 0; i < exp_digits; i++) {
+                str[pos++] = '0' + (exponent / a_exp);
+                exponent = exponent % a_exp;
+                a_exp /= 10;
+            }
+        }
+    }
+
+
+    template<char fmt, size_t N, typename T>
+        requires float_format<fmt> && (!std::is_floating_point_v<T>)
+    constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T&)
+    {
+        static_assert(fmt == '\0', "'%f' expected an floating point type");
+    }
+
     
     // 
     // %s -> string-like objects
