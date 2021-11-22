@@ -92,7 +92,7 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number in hexadecimal.
      */
     template<typename T>
-    constexpr size_t const_log16(T x)
+    constexpr size_t const_log16(T x) // TODO : change return type to uint8_t
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
@@ -138,33 +138,39 @@ namespace cst_fmt::utils
             return R(16) << (4 * (p - 1));
         }
     }
-
-
-    constexpr std::tuple<bool, int8_t, uint32_t> split_floating_number(const float& val)
+    
+    
+    /**
+     *  Converts the given number to characters in base 10.
+     */
+    template<size_t N, typename T>
+    void int_to_char_array(std::array<char, N>& str, size_t& pos, const T& val)
     {
-        // Single: 1 bit sign, 8 bits exponent, 23 bits mantissa
-        auto bits = std::bit_cast<uint32_t, float>(val);
-        bool sign = bits & (0x1 << 31);
-        uint8_t encoded_exp = (bits & (0xFF << 23)) >> 23;
-        auto exp = int8_t(encoded_exp);
-        exp -= 127; // Decode the exponent
-        uint32_t mantissa = bits & 0x00'7F'FF'FF;
-        mantissa |= 0x1 << 24; // Add the implicit one at the start of the mantissa
-        return { sign, exp, mantissa };
-    }
+    	if constexpr (std::is_signed_v<T>) {
+    		if (val < 0) {
+    			str[pos++] = '-';
+    		}
+    	}
+    	
+    	typedef typename std::make_unsigned<T>::type uT;
+    	uT u_val = static_cast<uT>(val);
 
+        uint8_t val_digits = 0;
+        
+        if (val == 0) {
+        	val_digits = 1;
+        }
+        else {
+        	val_digits = utils::const_log10(u_val);
+        }
+        
+        uT a = utils::const_10_pow<uT>(val_digits - 1);
 
-    constexpr std::tuple<bool, int16_t, uint64_t> split_floating_number(const double& val)
-    {
-        // Double: 1 bit sign, 11 bits exponent, 52 bits mantissa
-        auto bits = std::bit_cast<uint64_t, double>(val);
-        bool sign = bits & (0x1l << 63);
-        uint16_t encoded_exp = uint64_t(bits & (0x0F'FFl << 52)) >> 52;
-        auto exp = int16_t(encoded_exp);
-        exp -= 1023; // Decode the exponent
-        uint64_t mantissa = bits & ~(0x0F'FFl << 52);
-        mantissa |= 0x1l << 53; // Add the implicit one at the start of the mantissa
-        return { sign, exp, mantissa };
+        for (uint8_t i = 0; i < val_digits; i++) {
+            str[pos++] = '0' + (u_val / a);
+            u_val = u_val % a;
+            a /= 10;
+        }
     }
 }
 
@@ -291,31 +297,7 @@ namespace cst_fmt::specialisation
     	requires decimal_format<fmt> && std::is_integral_v<T> && (!std::same_as<T, bool>)
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, T val)
     {
-        if constexpr (std::is_signed<T>::value) {
-            if (val < 0) {
-                str[pos++] = '-';
-                val = -val;
-            }
-        }
-
-        typedef typename std::make_unsigned<T>::type uT;
-
-        size_t val_digits = 0;
-        
-        if (val == 0) {
-        	val_digits = 1;
-        }
-        else {
-        	val_digits = utils::const_log10(static_cast<uT>(val));
-        }
-        
-        uT a = utils::const_10_pow<uT>(val_digits - 1);
-
-        for (size_t i = 0; i < val_digits; i++) {
-            str[pos++] = '0' + (val / a);
-            val = val % a;
-            a /= 10;
-        }
+        utils::int_to_char_array(str, pos, val);
     }
 
 
@@ -437,76 +419,88 @@ namespace cst_fmt::specialisation
         static_assert(fmt == '\0', "'%f' expected an floating point type");
         return 0;
     }
-
-
+    
+    
     template<char fmt, size_t N, typename T>
         requires float_format<fmt> && std::is_floating_point_v<T>
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
-        // Handle edge cases
-        if (std::isnan(val)) {
-            str[pos++] = 'N';
-            str[pos++] = 'a';
-            str[pos++] = 'N';
-            return;
-        }
-        if (std::isinf(val)) {
-            if (val < 0) {
-                str[pos++] = '-';
-            }
-            str[pos++] = 'i';
-            str[pos++] = 'n';
-            str[pos++] = 'f';
-            return;
-        }
+        // Handle edge cases: NaN and inf. 0 is also optimized.
+	    if (std::isnan(val)) {
+	    	str[pos++] = 'N';
+	    	str[pos++] = 'a';
+	    	str[pos++] = 'N';
+	        return;
+	    }
+	    
+	    if (val == 0) {
+	    	str[pos++] = '0';
+	        return;
+	    }
+	
+	    if (val < 0) {
+	    	str[pos++] = '-';
+	    }
+	
+	    if (std::isinf(val)) {
+	    	str[pos++] = 'i';
+	    	str[pos++] = 'n';
+	    	str[pos++] = 'f';
+	        return;
+	    }
+	    
+	    const T val_abs = std::abs(val);
+	
+	    // Get the base 10 exponent and mantissa
+	    double raw_exp = std::log10(val_abs);
+	    int16_t exp = std::floor(std::abs(raw_exp)) * (raw_exp < 0 ? -1 : 1);
+	
+	    T mantissa = val_abs / std::pow(10, exp);
+	
+	    const uint8_t max_digits = 6;
+	    uint8_t digits = 0;
+	
+	    // Write the integer part of the mantissa
+	    if (std::numeric_limits<T>::has_denorm && val_abs >= std::numeric_limits<T>::min()) {
+	        // TODO : maybe unuseful
+	        uint64_t int_mantissa = mantissa;
+	        mantissa -= int_mantissa;
+	
+	        digits += const_log10(int_mantissa);
+	
+	    	utils::int_to_char_array(str, pos, int_mantissa);
+	    }
+	    else {
+	    	str[pos++] = '0';
+	    }
 
-        bool subnormal = !std::isnormal(val);
-
-        auto&& [ sign, exponent, mantissa ] = utils::split_floating_number(val);
-
-        if (sign) {
-            str[pos++] = '-';
-        }
-
-        typedef typename std::make_unsigned<decltype(mantissa)>::type uT;
-
-        size_t val_digits = 0;
-
-        if (val == 0) {
-            val_digits = 1;
-        }
-        else {
-            val_digits = utils::const_log10(static_cast<uT>(mantissa));
-        }
-
-        uT a = utils::const_10_pow<uT>(val_digits - 1);
-
-        for (size_t i = 0; i < val_digits; i++) {
-            str[pos++] = '0' + (mantissa / a);
-            mantissa = mantissa % a;
-            a /= 10;
-        }
-
-        if (exponent != 0) {
-            str[pos++] = 'e';
-
-            if (exponent < 0) {
-                str[pos++] = '-';
-                exponent = -exponent;
-            }
-
-            typedef typename std::make_unsigned<decltype(exponent)>::type uExp;
-            size_t exp_digits = utils::const_log10(static_cast<uExp>(exponent));
-            uExp a_exp = utils::const_10_pow<uExp>(exp_digits - 1);
-
-            for (size_t i = 0; i < exp_digits; i++) {
-                str[pos++] = '0' + (exponent / a_exp);
-                exponent = exponent % a_exp;
-                a_exp /= 10;
-            }
-        }
-    }
-
+	    str[pos++] = '.';
+	
+	    // Write the decimal psrt of the mantissa. The last digit to write is rounded.
+	    while (mantissa != 0 && digits < max_digits) {
+	        mantissa *= 10;
+	        uint8_t digit_val = mantissa;
+	        mantissa -= digit_val;
+	        str[pos++] = '0' + digit_val;
+	        digits++;
+	
+	        if (uint16_t((max_digits - digits) * mantissa) == 0) {
+	            break;
+	        }
+	    }
+	
+	    if (mantissa != 0) {
+	        uint8_t digit_val = std::round(mantissa * 10);
+	        str[pos++] = '0' + digit_val;
+	    }
+	
+	    // Write the exponent
+	    if (exp != 0) {
+	    	str[pos++] = 'e';
+	    	utils::int_to_char_array(str, pos, exp);
+	    }
+	}
+	
 
     template<char fmt, size_t N, typename T>
         requires float_format<fmt> && (!std::is_floating_point_v<T>)
