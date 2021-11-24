@@ -76,7 +76,7 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number.
      */
     template<typename T>
-    constexpr size_t const_log10(T x)
+    constexpr size_t const_log10(T x) // TODO : change to std::log10
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
@@ -92,7 +92,7 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number in hexadecimal.
      */
     template<typename T>
-    constexpr size_t const_log16(T x) // TODO : change return type to uint8_t
+    constexpr size_t const_log16(T x) // TODO : change to std::log
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
@@ -105,30 +105,10 @@ namespace cst_fmt::utils
 
 
     /**
-     *  Returns 10^p. Integers only.
-     */
-    template<typename R, typename T>
-    constexpr R const_10_pow(T p)
-    {
-        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
-        if (p == 0) {
-            return 1;
-        }
-        else {
-            R a = 10;
-            for (size_t i = 1; i < p; i++) {
-                a *= 10;
-            }
-            return a;
-        }
-    }
-
-
-    /**
      *  Returns 16^p. Integers only.
      */
     template<typename R, typename T>
-    constexpr R const_16_pow(T p)
+    constexpr R const_16_pow(T p) // TODO : change to std::pow
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         if (p == 0) {
@@ -138,38 +118,79 @@ namespace cst_fmt::utils
             return R(16) << (4 * (p - 1));
         }
     }
+
+
+    /**
+     * Constexpr floor function. Should work for any floating point value.
+     */
+    template<typename T>
+        requires std::is_floating_point_v<T>
+    constexpr T floor(const T val) // TODO : remove maybe if not used
+    {
+        if (std::isinf(val) || std::isnan(val)) {
+            return val;
+        }
+
+        if (std::abs(val) < 1) {
+            return 0;
+        }
+
+        int16_t abs_exp = std::log10(std::abs(val)); // exp can only be > 0 since abs(val) > 1
+        if (abs_exp > std::numeric_limits<T>::max_digits10) {
+            return val; // The number is too big to have a decimal part
+        }
+
+        T remainder = val - int64_t(val);
+
+        if (std::signbit(val)) {
+            if (remainder != 0) {
+                return val - remainder - 1;
+            }
+            else {
+                return val; // No decimal part
+            }
+        }
+        else {
+            return val - remainder;
+        }
+    }
     
     
     /**
      *  Converts the given number to characters in base 10.
+     *  If 'ignore_trailing_zeros' is true, zeros at the end of the number will not be written.
      */
-    template<size_t N, typename T>
-    void int_to_char_array(std::array<char, N>& str, size_t& pos, const T& val)
+    template<bool ignore_trailing_zeros = false, size_t N, typename T>
+    constexpr void int_to_char_array(std::array<char, N>& str, size_t& pos, const T& val)
     {
-    	if constexpr (std::is_signed_v<T>) {
+        typedef typename std::make_unsigned<T>::type uT;
+        uT u_val = val;
+
+        if constexpr (std::is_signed_v<T>) {
     		if (val < 0) {
     			str[pos++] = '-';
+                u_val = -val;
     		}
     	}
-    	
-    	typedef typename std::make_unsigned<T>::type uT;
-    	uT u_val = static_cast<uT>(val);
 
-        uint8_t val_digits = 0;
-        
-        if (val == 0) {
-        	val_digits = 1;
-        }
-        else {
-        	val_digits = utils::const_log10(u_val);
-        }
-        
-        uT a = utils::const_10_pow<uT>(val_digits - 1);
+        uint16_t val_digits = 1;
 
-        for (uint8_t i = 0; i < val_digits; i++) {
+        if (u_val != 0 && u_val != 1) {
+            val_digits += std::floor(std::log10(u_val));
+        }
+
+        uT a = std::pow(10, val_digits - 1);
+
+        for (uint16_t i = 0; i < val_digits; i++) {
             str[pos++] = '0' + (u_val / a);
             u_val = u_val % a;
             a /= 10;
+
+            if constexpr (ignore_trailing_zeros) {
+                if (u_val == 0) {
+                    break;
+                }
+            }
         }
     }
 }
@@ -408,7 +429,7 @@ namespace cst_fmt::specialisation
     consteval size_t formatted_str_length()
     {
         // sign + comma + number of digits for exact representation + exponent 'e' + exponent sign + exponent length
-        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 + utils::const_log10(std::numeric_limits<T>::max_exponent10);
+        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 + utils::const_log10(uint32_t(std::numeric_limits<T>::max_exponent10));
     }
 
 
@@ -425,81 +446,124 @@ namespace cst_fmt::specialisation
         requires float_format<fmt> && std::is_floating_point_v<T>
     constexpr void format_to_str(std::array<char, N>& str, size_t& pos, const T& val)
     {
-        // Handle edge cases: NaN and inf. 0 is also optimized.
-	    if (std::isnan(val)) {
-	    	str[pos++] = 'N';
-	    	str[pos++] = 'a';
-	    	str[pos++] = 'N';
-	        return;
-	    }
-	    
-	    if (val == 0) {
-	    	str[pos++] = '0';
-	        return;
-	    }
-	
-	    if (val < 0) {
-	    	str[pos++] = '-';
-	    }
-	
-	    if (std::isinf(val)) {
-	    	str[pos++] = 'i';
-	    	str[pos++] = 'n';
-	    	str[pos++] = 'f';
-	        return;
-	    }
-	    
-	    const T val_abs = std::abs(val);
-	
-	    // Get the base 10 exponent and mantissa
-	    double raw_exp = std::log10(val_abs);
-	    int16_t exp = std::floor(std::abs(raw_exp)) * (raw_exp < 0 ? -1 : 1);
-	
-	    T mantissa = val_abs / std::pow(10, exp);
-	
-	    const uint8_t max_digits = 6;
-	    uint8_t digits = 0;
-	
-	    // Write the integer part of the mantissa
-	    if (std::numeric_limits<T>::has_denorm && val_abs >= std::numeric_limits<T>::min()) {
-	        // TODO : maybe unuseful
-	        uint64_t int_mantissa = mantissa;
-	        mantissa -= int_mantissa;
-	
-	        digits += const_log10(int_mantissa);
-	
-	    	utils::int_to_char_array(str, pos, int_mantissa);
-	    }
-	    else {
-	    	str[pos++] = '0';
-	    }
+        constexpr uint32_t resolution_digits = std::numeric_limits<T>::max_digits10; // Number of digits to exactly represent a number
+        constexpr uint32_t max_digits = 6; // Precision at which the number is formatted to
 
-	    str[pos++] = '.';
-	
-	    // Write the decimal psrt of the mantissa. The last digit to write is rounded.
-	    while (mantissa != 0 && digits < max_digits) {
-	        mantissa *= 10;
-	        uint8_t digit_val = mantissa;
-	        mantissa -= digit_val;
-	        str[pos++] = '0' + digit_val;
-	        digits++;
-	
-	        if (uint16_t((max_digits - digits) * mantissa) == 0) {
-	            break;
-	        }
-	    }
-	
-	    if (mantissa != 0) {
-	        uint8_t digit_val = std::round(mantissa * 10);
-	        str[pos++] = '0' + digit_val;
-	    }
-	
-	    // Write the exponent
-	    if (exp != 0) {
-	    	str[pos++] = 'e';
-	    	utils::int_to_char_array(str, pos, exp);
-	    }
-	}
+        // Handle edge cases: NaN and inf. 0 is also optimized.
+        if (std::signbit(val)) { // And not 'val < 0', so that values like '-nan' can be handled properly
+            str[pos++] = '-';
+        }
+
+        if (std::isnan(val)) {
+            str[pos++] = 'n';
+            str[pos++] = 'a';
+            str[pos++] = 'n';
+            return;
+        }
+
+        if (std::isinf(val)) {
+            str[pos++] = 'i';
+            str[pos++] = 'n';
+            str[pos++] = 'f';
+            return;
+        }
+
+        if (val == 0) {
+            str[pos++] = '0';
+            return;
+        }
+
+        const T val_abs = std::abs(val);
+
+        // Get the base 10 exponent (rounded down) and mantissa
+        int exp = std::log10(val_abs);
+
+        // Extract the mantissa as a number between 0 and 10
+        T mantissa = val_abs / std::pow(T(10), exp);
+        mantissa *= 10;
+        exp -= 1;
+
+        // Round the mantissa to the number of digits of precision wanted
+        mantissa = std::round(mantissa * std::pow(T(10), resolution_digits)) / std::pow(T(10), resolution_digits);
+
+        bool whole_number = false;
+        uint32_t int_mantissa = 0;
+        if (-4 <= exp && exp <= 4) {
+            // Display the whole number without an exponent
+            mantissa *= std::pow(10, exp);
+            int_mantissa = std::floor(mantissa);
+            whole_number = true;
+            exp = 0;
+        }
+        else {
+            int_mantissa = std::floor(mantissa);
+            if (int_mantissa >= 10) {
+                // Leave only one digit in the integer part
+                int_mantissa /= 10;
+                mantissa /= 10;
+                exp += 1;
+            }
+        }
+
+        mantissa -= int_mantissa;
+
+        if (exp == std::numeric_limits<T>::min_exponent10 - 1) {
+            // If 'val' is at the normalized limit of its type, then we go to subnormal values and loose precision.
+            // TODO : fix this
+            mantissa /= 2.; // Temporary fix. Helps a bit.
+        }
+
+        uint32_t dec_mantissa = 0;
+        int leading_zeros = 0;
+
+        if (mantissa != 0) {
+            // Fill the rest of the available digits with the decimal part
+            uint32_t digits = uint32_t(std::floor(std::log10(int_mantissa))) + 1;
+            uint32_t available_digits = max_digits - digits;
+            if (whole_number) {
+                int dec_exp = std::log10(mantissa);
+                leading_zeros -= dec_exp;
+                mantissa = mantissa / std::pow(T(10), dec_exp);
+            }
+            mantissa = std::round(mantissa * std::pow(10, available_digits));
+            dec_mantissa = mantissa;
+            leading_zeros += available_digits - 1 - std::floor(std::log10(mantissa));
+
+            if (leading_zeros < 0) {
+                // The rounded decimal part is either 0 or 1. In all cases there is nothing to print.
+                if (dec_mantissa > 0) {
+                    int_mantissa += 1;
+                    if (int_mantissa >= 10) {
+                        // Leave only one digit in the integer part
+                        int_mantissa /= 10;
+                        exp += 1;
+                    }
+                }
+                dec_mantissa = 0;
+            }
+        }
+
+        utils::int_to_char_array(str, pos, int_mantissa);
+
+        if (dec_mantissa != 0) {
+            str[pos++] = '.';
+
+            // Write leading zeros
+            for (int i = 0; i < leading_zeros; i++) {
+                str[pos++] = '0';
+            }
+
+            utils::int_to_char_array<true>(str, pos, dec_mantissa);
+        }
+
+        if (exp != 0) {
+            str[pos++] = 'e';
+            if (exp > 0) {
+                str[pos++] = '+';
+            }
+            utils::int_to_char_array(str, pos, exp);
+        }
+    }
 	
 
     template<char fmt, size_t N, typename T>
@@ -824,6 +888,10 @@ namespace cst_fmt
         internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, std::forward<Args>(args)...);
         str.set_effective_size(str_pos);
 
+        if (str_pos < str_size) {
+            str[str_pos] = '\0';
+        }
+
         return str;
     }
 
@@ -842,6 +910,10 @@ namespace cst_fmt
         size_t str_pos = 0;
         internal::parse_format_internal<fmt, str_size, 0>(str, str_pos, std::forward<Args>(args)...);
         str.set_effective_size(str_pos);
+
+        if (str_pos < str_size) {
+            str[str_pos] = '\0';
+        }
 
         return str;
     }
