@@ -41,7 +41,7 @@ int main()
 
     const auto start = std::chrono::high_resolution_clock::now();
 
-    const unsigned long N = 1000;
+    const unsigned long N = 100000;
 
     uint32_t count = 0;
     while (count < N) {

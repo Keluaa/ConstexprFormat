@@ -53,7 +53,7 @@ namespace cst_fmt::utils
 	{
 		static constexpr bool _is_dyn_str_holder = true;
 		static constexpr size_t size() { return N; }
-		
+
 		const char* str;
 	};
 	
@@ -76,10 +76,10 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number.
      */
     template<typename T>
-    constexpr size_t const_log10(T x) // TODO : change to std::log10
+    constexpr uint32_t decimal_digits_count(T x)
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
-        size_t i = 0;
+        uint32_t i = 0;
         while (x > 0) {
             x /= 10;
             i++;
@@ -92,15 +92,11 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number in hexadecimal.
      */
     template<typename T>
-    constexpr size_t const_log16(T x) // TODO : change to std::log
+    constexpr uint32_t hexadecimal_digits_count(T x)
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
-        size_t i = 0;
-        while (x > 0) {
-            x >>= 4;
-            i++;
-        }
-        return i;
+        uint32_t count = std::bit_width(x);
+        return count / 4 + (count % 4 == 0 ? 0 : 1);
     }
 
 
@@ -108,7 +104,7 @@ namespace cst_fmt::utils
      *  Returns 16^p. Integers only.
      */
     template<typename R, typename T>
-    constexpr R const_16_pow(T p) // TODO : change to std::pow
+    constexpr R const_16_pow(T p)
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         if (p == 0) {
@@ -119,42 +115,6 @@ namespace cst_fmt::utils
         }
     }
 
-
-    /**
-     * Constexpr floor function. Should work for any floating point value.
-     */
-    template<typename T>
-        requires std::is_floating_point_v<T>
-    constexpr T floor(const T val) // TODO : remove maybe if not used
-    {
-        if (std::isinf(val) || std::isnan(val)) {
-            return val;
-        }
-
-        if (std::abs(val) < 1) {
-            return 0;
-        }
-
-        int16_t abs_exp = std::log10(std::abs(val)); // exp can only be > 0 since abs(val) > 1
-        if (abs_exp > std::numeric_limits<T>::max_digits10) {
-            return val; // The number is too big to have a decimal part
-        }
-
-        T remainder = val - int64_t(val);
-
-        if (std::signbit(val)) {
-            if (remainder != 0) {
-                return val - remainder - 1;
-            }
-            else {
-                return val; // No decimal part
-            }
-        }
-        else {
-            return val - remainder;
-        }
-    }
-    
     
     /**
      *  Converts the given number to characters in base 10.
@@ -173,7 +133,7 @@ namespace cst_fmt::utils
     		}
     	}
 
-        uint16_t val_digits = 1;
+        uint32_t val_digits = 1;
 
         if (u_val != 0 && u_val != 1) {
             val_digits += std::floor(std::log10(u_val));
@@ -181,7 +141,7 @@ namespace cst_fmt::utils
 
         uT a = std::pow(10, val_digits - 1);
 
-        for (uint16_t i = 0; i < val_digits; i++) {
+        for (uint32_t i = 0; i < val_digits; i++) {
             str[pos++] = '0' + (u_val / a);
             u_val = u_val % a;
             a /= 10;
@@ -372,20 +332,20 @@ namespace cst_fmt::specialisation
         typedef typename std::make_unsigned<T>::type uT;
 
         uT u_val = static_cast<uT>(val);
-        size_t val_digits = 0;
+        uint32_t val_digits = 0;
         
         if (val == 0) {
         	val_digits = 1;
         }
         else {
-        	val_digits = utils::const_log16(u_val);
+        	val_digits = utils::hexadecimal_digits_count(u_val);
         }
         
         uT a = utils::const_16_pow<uT>(val_digits - 1);
         
         str[pos++] = '0';
         str[pos++] = 'x';
-        for (size_t i = 0; i < val_digits; i++) {
+        for (uint32_t i = 0; i < val_digits; i++) {
         	char c = '0' + (u_val / a);
         	if (c > '9') {
         		c += 7; // Shift to the 'A' to 'F' range
@@ -429,7 +389,8 @@ namespace cst_fmt::specialisation
     consteval size_t formatted_str_length()
     {
         // sign + comma + number of digits for exact representation + exponent 'e' + exponent sign + exponent length
-        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 + utils::const_log10(uint32_t(std::numeric_limits<T>::max_exponent10));
+        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 +
+                utils::decimal_digits_count(uint32_t(std::numeric_limits<T>::max_exponent10));
     }
 
 
@@ -479,9 +440,22 @@ namespace cst_fmt::specialisation
         int exp = std::log10(val_abs);
 
         // Extract the mantissa as a number between 0 and 10
-        T mantissa = val_abs / std::pow(T(10), exp);
-        mantissa *= 10;
-        exp -= 1;
+        T mantissa = val_abs;
+        if (exp == std::numeric_limits<T>::min_exponent10) {
+            // If 'val' is at the normalized limit of its type, then we would go to subnormal values when dividing by
+            // 10^exp and loose precision.
+            // TODO : still not fixed...
+            mantissa *= std::pow(T(10), resolution_digits);
+            mantissa /= std::pow(T(10), exp);
+            mantissa /= std::pow(T(10), resolution_digits);
+            mantissa *= 10;
+            exp -= 1;
+        }
+        else {
+            mantissa /= std::pow(T(10), exp);
+            mantissa *= 10;
+            exp -= 1;
+        }
 
         // Round the mantissa to the number of digits of precision wanted
         mantissa = std::round(mantissa * std::pow(T(10), resolution_digits)) / std::pow(T(10), resolution_digits);
@@ -490,6 +464,7 @@ namespace cst_fmt::specialisation
         uint32_t int_mantissa = 0;
         if (-4 <= exp && exp <= 4) {
             // Display the whole number without an exponent
+            // TODO : fix the problem with the precision here
             mantissa *= std::pow(10, exp);
             int_mantissa = std::floor(mantissa);
             whole_number = true;
@@ -506,12 +481,6 @@ namespace cst_fmt::specialisation
         }
 
         mantissa -= int_mantissa;
-
-        if (exp == std::numeric_limits<T>::min_exponent10 - 1) {
-            // If 'val' is at the normalized limit of its type, then we go to subnormal values and loose precision.
-            // TODO : fix this
-            mantissa /= 2.; // Temporary fix. Helps a bit.
-        }
 
         uint32_t dec_mantissa = 0;
         int leading_zeros = 0;
