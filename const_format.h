@@ -17,6 +17,11 @@
 #include <ostream>
 
 
+// GCC 11 has constexpr math function, while clang doesn't.
+//#define CONSTEXPR_MATH __GNUC__ >= 11
+#define CONSTEXPR_MATH 0
+
+
 namespace cst_fmt::utils
 {
 	template<size_t N, const char (&STR)[N]>
@@ -76,10 +81,10 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number.
      */
     template<typename T>
-    constexpr size_t const_log10(T x) // TODO : change to std::log10
+    constexpr auto decimal_digits_count(T x)
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
-        size_t i = 0;
+        uint32_t i = 0;
         while (x > 0) {
             x /= 10;
             i++;
@@ -92,7 +97,7 @@ namespace cst_fmt::utils
      *  Returns the number of decimal digits needed to represent the given number in hexadecimal.
      */
     template<typename T>
-    constexpr size_t const_log16(T x) // TODO : change to std::log
+    constexpr uint32_t hexadecimal_digits_count(T x)
     {
         static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
         size_t i = 0;
@@ -101,22 +106,177 @@ namespace cst_fmt::utils
             i++;
         }
         return i;
+        // TODO : use 'return std::bit_width(x) / 4 + 1;'
+    }
+
+
+#if !CONSTEXPR_MATH
+    // TODO : handle the subnormal cases, where there is no implicit one at the start of the mantissa
+    constexpr std::tuple<bool, int8_t, uint32_t> split_floating_number(const float& val)
+    {
+        // Single: 1 bit sign, 8 bits exponent, 23 bits mantissa
+        auto bits = std::bit_cast<uint32_t, float>(val);
+        bool sign = bits & (0x1 << 31);
+        uint8_t encoded_exp = (bits & (0xFF << 23)) >> 23;
+        auto exp = int8_t(encoded_exp);
+        exp -= 127; // Decode the exponent
+        uint32_t mantissa = bits & 0x00'7F'FF'FF;
+        mantissa |= 0x1 << 23; // Add the implicit one at the start of the mantissa
+        return { sign, exp, mantissa };
+    }
+
+
+    constexpr std::tuple<bool, int16_t, uint64_t> split_floating_number(const double& val)
+    {
+        // Double: 1 bit sign, 11 bits exponent, 52 bits mantissa
+        auto bits = std::bit_cast<uint64_t, double>(val);
+        bool sign = bits & (0x1l << 63);
+        uint16_t encoded_exp = uint64_t(bits & (0x07'FFl << 52)) >> 52;
+        auto exp = int16_t(encoded_exp);
+        exp -= 1023; // Decode the exponent
+        uint64_t mantissa = bits & ~(0x0F'FFl << 52);
+        mantissa |= 0x1l << 52; // Add the implicit one at the start of the mantissa
+        return { sign, exp, mantissa };
+    }
+
+
+#ifdef __SIZEOF_INT128__
+    constexpr std::tuple<bool, int16_t, __int128> split_floating_number(const long double& val)
+    {
+        // Supposes 'long double' uses the binary128 format, and not extended double precision format.
+        // Quad: 1 bit sign, 15 bits exponent, 112 bits mantissa
+        auto bits = std::bit_cast<__int128, long double>(val);
+        bool sign = bits & (__int128(0x1) << 127);
+        uint16_t encoded_exp = __int128(bits & (__int128(0x7F'FF) << 112)) >> 112;
+        auto exp = int16_t(encoded_exp);
+        exp -= 16383; // Decode the exponent
+        uint64_t mantissa = bits & ~(__int128(0x7F'FF) << 112);
+        mantissa |= __int128(0x1) << 112; // Add the implicit one at the start of the mantissa
+        return { sign, exp, mantissa };
+    }
+#else
+    constexpr std::tuple<bool, int16_t, uint64_t> split_floating_number(const long double& val)
+    {
+        if constexpr (sizeof(long double) == 12 /* 80 bits extended format (32 bits aligned) */ || sizeof(long double) == sizeof(double)) {
+            return split_floating_number((double) val);
+        }
+        else {
+            static_assert(val == 0, "128 bits numbers (__int128) is not supported by the compiler. '%f' cannot format 'long double' (aka quad-precision float).");
+            return { false, 0, 0 };
+        }
+    }
+#endif
+
+
+    /**
+     * Decomposes a floating-point number into the form a*2^b, with |a| in ]1/2, 1].
+     * Returns (a, b) as a tuple.
+     */
+    template<typename T>
+        requires std::floating_point<T> && std::numeric_limits<T>::is_iec559
+    constexpr std::tuple<T, int> decompose_float(const T& val)
+    {
+        constexpr uint32_t mantissa_digits = (std::same_as<T, float> ? 24 : std::same_as<T, double> ? 53 : std::same_as<T, long double> ? 113 : 0);
+        static_assert(mantissa_digits != 0, "Unsupported floating point format.");
+        auto&& [sign, exp, mantissa] = split_floating_number(val);
+        typedef decltype(mantissa) flt;
+        T a = T(mantissa) / (flt(1) << mantissa_digits) * (sign ? -1 : 1);
+        return { a, exp + 1 };
     }
 
 
     /**
-     *  Returns 16^p. Integers only.
+     * Approximates e^x using taylor series.
      */
-    template<typename R, typename T>
-    constexpr R const_16_pow(T p) // TODO : change to std::pow
+    template<typename T>
+        requires std::floating_point<T>
+    constexpr T approx_exp(T x)
     {
-        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
-        if (p == 0) {
-            return 1;
+        constexpr uint32_t iter = std::numeric_limits<T>::digits / 2;
+
+        if (std::isnan(x)) {
+            return x;
+        }
+        else if (std::isinf(x)) {
+            return (x < 0) ? 0 : x;
+        }
+
+        bool neg = x < 0;
+        if (neg) {
+            x = -x;
+        }
+
+        T sum = 1;
+        for (uint32_t i = iter - 1; i > 0; i--) {
+            sum = 1 + sum * x / i;
+        }
+
+        if (neg) {
+            return T(1) / sum;
         }
         else {
-            return R(16) << (4 * (p - 1));
+            return sum;
         }
+    }
+
+
+    /**
+     * Approximates ln(x) using taylor series.
+     */
+    template<typename T>
+        requires std::floating_point<T>
+    constexpr T approx_ln(T x)
+    {
+        constexpr uint32_t iter = 10; // Going higher will not improve the results much.
+
+        if (x == 0) {
+            return -INFINITY;
+        }
+        else if (x < 0) {
+            return NAN;
+        }
+
+        // x = a * 2^b with a in ]1/2, 1]
+        auto&& [a, b] = decompose_float(x);
+
+        // ln(a) using ln(y + 1) = y - y^2/2 + y^3/3 - ... = y(1 - y(1/2 - y(1/3 - y(1/4 - ...))))
+        T y = a - 1, sum = 0;
+        for (uint32_t i = iter - (iter % 2) + 1; i >= 1; i--) {
+            sum = T(1) / i - sum * y;
+        }
+        sum *= y;
+
+        // ln(x) = ln(a) + n*ln(2)
+        return sum + b * std::numbers::ln2;
+    }
+
+
+    /**
+     * Returns log_base(x). Precomputes ln(base).
+     */
+    template<double base, typename T>
+        requires std::floating_point<T>
+    constexpr T approx_log(T x)
+    {
+        constexpr T ln_base = approx_ln(T(base));
+        return approx_ln(x) / ln_base;
+    }
+
+
+    // TODO : pow(x, y)
+
+#endif
+
+
+    template<typename T>
+        requires std::floating_point<T>
+    constexpr T log10(T x)
+    {
+#if CONSTEXPR_MATH
+        return std::log10(x);
+#else
+        return approx_log<10.>(x);
+#endif
     }
 
 
@@ -124,9 +284,12 @@ namespace cst_fmt::utils
      * Constexpr floor function. Should work for any floating point value.
      */
     template<typename T>
-        requires std::is_floating_point_v<T>
-    constexpr T floor(const T val) // TODO : remove maybe if not used
+    requires std::is_floating_point_v<T>
+    constexpr T floor(const T val)
     {
+#if CONSTEXPR_MATH
+        return std::floor(val);
+#else
         if (std::isinf(val) || std::isnan(val)) {
             return val;
         }
@@ -135,7 +298,7 @@ namespace cst_fmt::utils
             return 0;
         }
 
-        int16_t abs_exp = std::log10(std::abs(val)); // exp can only be > 0 since abs(val) > 1
+        int16_t abs_exp = approx_log<10.>(std::abs(val)); // exp can only be > 0 since abs(val) > 1
         if (abs_exp > std::numeric_limits<T>::max_digits10) {
             return val; // The number is too big to have a decimal part
         }
@@ -152,6 +315,23 @@ namespace cst_fmt::utils
         }
         else {
             return val - remainder;
+        }
+#endif
+    }
+
+
+    /**
+     *  Returns 16^p. Integers only.
+     */
+    template<typename R, typename T>
+    constexpr R const_16_pow(T p)
+    {
+        static_assert(std::is_integral_v<T> && std::is_unsigned_v<T>, "The argument must be an unsigned integral");
+        if (p == 0) {
+            return 1;
+        }
+        else {
+            return R(16) << (4 * (p - 1));
         }
     }
     
@@ -176,7 +356,7 @@ namespace cst_fmt::utils
         uint16_t val_digits = 1;
 
         if (u_val != 0 && u_val != 1) {
-            val_digits += std::floor(std::log10(u_val));
+            val_digits += utils::floor(utils::log10(double(u_val)));
         }
 
         uT a = std::pow(10, val_digits - 1);
@@ -236,8 +416,8 @@ namespace cst_fmt
 
 
         [[nodiscard]]
-#ifndef __clang__
-        // Clang doesn't support constexpr string constructors for now
+#if CONSTEXPR_MATH
+        // Only GCC seems to support constexpr string constructors for now
         constexpr
 #endif
         std::string str() const { return std::string(data(), m_effective_size + 1); }
@@ -378,7 +558,7 @@ namespace cst_fmt::specialisation
         	val_digits = 1;
         }
         else {
-        	val_digits = utils::const_log16(u_val);
+        	val_digits = utils::hexadecimal_digits_count(u_val);
         }
         
         uT a = utils::const_16_pow<uT>(val_digits - 1);
@@ -429,7 +609,8 @@ namespace cst_fmt::specialisation
     consteval size_t formatted_str_length()
     {
         // sign + comma + number of digits for exact representation + exponent 'e' + exponent sign + exponent length
-        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 + utils::const_log10(uint32_t(std::numeric_limits<T>::max_exponent10));
+        return 1 + 1 + std::numeric_limits<T>::max_digits10 + 1 + 1 +
+                utils::decimal_digits_count(uint32_t(std::numeric_limits<T>::max_exponent10));
     }
 
 
@@ -476,7 +657,7 @@ namespace cst_fmt::specialisation
         const T val_abs = std::abs(val);
 
         // Get the base 10 exponent (rounded down) and mantissa
-        int exp = std::log10(val_abs);
+        int exp = utils::log10(val_abs);
 
         // Extract the mantissa as a number between 0 and 10
         T mantissa = val_abs / std::pow(T(10), exp);
@@ -491,12 +672,12 @@ namespace cst_fmt::specialisation
         if (-4 <= exp && exp <= 4) {
             // Display the whole number without an exponent
             mantissa *= std::pow(10, exp);
-            int_mantissa = std::floor(mantissa);
+            int_mantissa = utils::floor(mantissa);
             whole_number = true;
             exp = 0;
         }
         else {
-            int_mantissa = std::floor(mantissa);
+            int_mantissa = utils::floor(mantissa);
             if (int_mantissa >= 10) {
                 // Leave only one digit in the integer part
                 int_mantissa /= 10;
@@ -518,16 +699,16 @@ namespace cst_fmt::specialisation
 
         if (mantissa != 0) {
             // Fill the rest of the available digits with the decimal part
-            uint32_t digits = uint32_t(std::floor(std::log10(int_mantissa))) + 1;
+            uint32_t digits = uint32_t(utils::floor(utils::log10(double(int_mantissa)))) + 1;
             uint32_t available_digits = max_digits - digits;
             if (whole_number) {
-                int dec_exp = std::log10(mantissa);
+                int dec_exp = utils::log10(mantissa);
                 leading_zeros -= dec_exp;
                 mantissa = mantissa / std::pow(T(10), dec_exp);
             }
             mantissa = std::round(mantissa * std::pow(10, available_digits));
             dec_mantissa = mantissa;
-            leading_zeros += available_digits - 1 - std::floor(std::log10(mantissa));
+            leading_zeros += available_digits - 1 - utils::floor(utils::log10(mantissa));
 
             if (leading_zeros < 0) {
                 // The rounded decimal part is either 0 or 1. In all cases there is nothing to print.
@@ -918,6 +1099,9 @@ namespace cst_fmt
         return str;
     }
 }
+
+
+#undef CONSTEXPR_MATH
 
 
 #endif //CONSTEXPRFORMAT_CONST_FORMAT_H
